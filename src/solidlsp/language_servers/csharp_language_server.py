@@ -182,6 +182,56 @@ def find_solution_or_project_file(root_dir: str) -> str | None:
     return csproj_file
 
 
+DECOMPILATION_NAVIGATION_SECTIONS = (
+    "csharp_navigate_to_decompiled_sources",
+    "csharp_navigate_to_source_link_and_embedded_sources",
+)
+"""
+Configuration sections controlling navigation into assemblies without sources.
+These must be enabled for go-to-definition to resolve into referenced assemblies.
+"""
+
+
+def resolve_workspace_configuration_sections(sections: list[str]) -> list[Any]:
+    """
+    Determines the configuration values to report to the language server for the given sections.
+
+    :param sections: the configuration section names requested by the server
+    :return: the values to report, in the same order as `sections`
+    """
+    result: list[Any] = []
+    for section in sections:
+        # Decompiled/source-link navigation must stay enabled: it is what allows go-to-definition
+        # to resolve into assemblies without sources (Roslyn decompiles the type and writes a real
+        # .cs file to $TMPDIR/MetadataAsSource/...). These sections contain "navigate" and would
+        # otherwise be disabled by the generic boolean rule below.
+        if section in DECOMPILATION_NAVIGATION_SECTIONS:
+            result.append(True)
+        elif section.startswith(("dotnet", "csharp")):
+            if "enable" in section or "show" in section or "suppress" in section or "navigate" in section:
+                result.append(False)
+            elif "scope" in section:
+                if "analyzer_diagnostics_scope" in section or "compiler_diagnostics_scope" in section:
+                    result.append("openFiles")
+                else:
+                    result.append("openFiles")
+            elif section == "dotnet_member_insertion_location":
+                result.append("with_other_members_of_the_same_kind")
+            elif section == "dotnet_property_generation_behavior":
+                result.append("prefer_throwing_properties")
+            elif "location" in section or "behavior" in section:
+                result.append(None)
+            else:
+                result.append(None)
+        elif section == "tab_width" or section == "indent_size":
+            result.append(4)
+        elif section == "insert_final_newline":
+            result.append(True)
+        else:
+            result.append(None)
+    return result
+
+
 class CSharpLanguageServer(SolidLanguageServer):
     """
     Provides C# specific instantiation of the LanguageServer class using the official Roslyn-based
@@ -584,49 +634,9 @@ class CSharpLanguageServer(SolidLanguageServer):
 
         def handle_workspace_configuration(params: dict) -> list:
             """Handle workspace/configuration requests from the server."""
-            items = params.get("items", [])
-            result: list[Any] = []
-
-            for item in items:
-                section = item.get("section", "")
-
-                # Provide default values based on the configuration section
-                if section.startswith(("dotnet", "csharp")):
-                    # Default configuration for C# settings
-                    if "enable" in section or "show" in section or "suppress" in section or "navigate" in section:
-                        # Boolean settings
-                        result.append(False)
-                    elif "scope" in section:
-                        # Scope settings - use appropriate enum values
-                        if "analyzer_diagnostics_scope" in section:
-                            result.append("openFiles")  # BackgroundAnalysisScope
-                        elif "compiler_diagnostics_scope" in section:
-                            result.append("openFiles")  # CompilerDiagnosticsScope
-                        else:
-                            result.append("openFiles")
-                    elif section == "dotnet_member_insertion_location":
-                        # ImplementTypeInsertionBehavior enum
-                        result.append("with_other_members_of_the_same_kind")
-                    elif section == "dotnet_property_generation_behavior":
-                        # ImplementTypePropertyGenerationBehavior enum
-                        result.append("prefer_throwing_properties")
-                    elif "location" in section or "behavior" in section:
-                        # Other enum settings - return null to avoid parsing errors
-                        result.append(None)
-                    else:
-                        # Default for other dotnet/csharp settings
-                        result.append(None)
-                elif section == "tab_width" or section == "indent_size":
-                    # Tab and indent settings
-                    result.append(4)
-                elif section == "insert_final_newline":
-                    # Editor settings
-                    result.append(True)
-                else:
-                    # Unknown configuration - return null
-                    result.append(None)
-
-            return result
+            sections = [item.get("section", "") for item in params.get("items", [])]
+            log.debug("workspace/configuration requested sections: %s", sections)
+            return resolve_workspace_configuration_sections(sections)
 
         def handle_work_done_progress_create(params: dict) -> None:
             """Handle work done progress create requests."""
