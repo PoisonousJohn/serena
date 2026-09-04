@@ -16,6 +16,13 @@ Status of the `main` branch. Changes prior to the next official version change w
     the IDE's own config-directory lock; JetBrains IDE launches are now serialized per launch
     command and Serena waits for the plugin server to become reachable before proceeding (#1864)
 
+* Tools:
+  - `find_symbol`: New parameter `search_deps`, which additionally searches the project's
+    dependencies for matching symbols, i.e. libraries that are referenced but whose sources are not
+    part of the project and which the language server therefore does not index. Currently
+    implemented for C#, reading the metadata of referenced .NET assemblies; symbols found this way
+    are reported with encoded external paths and are read-only
+
 * Hooks:
   - Fix: Codex's documented hook wiring only routes `remind` through `PreToolUse` on `Bash`, so its
     reset-on-Serena-tool-use branch was unreachable there and reminder counters never cleared after a

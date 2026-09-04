@@ -10,11 +10,18 @@ committed.
 
 import subprocess
 from pathlib import Path
+from types import SimpleNamespace
+from typing import TYPE_CHECKING, cast
 
 import pytest
 
+from serena.dotnet.assembly_dependency_search import AssemblyDependencySearch
+from serena.dotnet.assembly_file_proxy import AssemblyFileProxy
 from serena.dotnet.assembly_symbol import AssemblySymbolKind
 from serena.dotnet.assembly_symbol_index import AssemblySymbolIndex, DnFileMetadataReader
+
+if TYPE_CHECKING:
+    from serena.project import Project
 
 pytestmark = pytest.mark.csharp
 
@@ -113,3 +120,70 @@ class TestReadRealAssembly:
     def test_overloads_are_addressable_by_index(self, index: AssemblySymbolIndex):
         assert [s.overload_idx for s in index.find("Person/Describe")] == [0, 1]
         assert [s.overload_idx for s in index.find("Person/Describe[1]")] == [1]
+
+
+_CONSUMER_PROJECT_FILE = """<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>disable</Nullable>
+  </PropertyGroup>
+  <ItemGroup>
+    <Reference Include="AssemblySymbolFixture">
+      <HintPath>libs\\AssemblySymbolFixture.dll</HintPath>
+    </Reference>
+  </ItemGroup>
+</Project>
+"""
+
+
+@pytest.fixture(scope="module")
+def consumer_project_root(built_assembly: Path, tmp_path_factory: pytest.TempPathFactory) -> Path:
+    """
+    :return: the root of a project referencing the fixture assembly, with no sources for it
+    """
+    root = tmp_path_factory.mktemp("assembly_consumer")
+    (root / "Consumer.csproj").write_text(_CONSUMER_PROJECT_FILE, encoding="utf-8")
+    libs = root / "libs"
+    libs.mkdir()
+    (libs / "AssemblySymbolFixture.dll").write_bytes(built_assembly.read_bytes())
+    (root / "Program.cs").write_text("public class Program { public static void Main() { } }", encoding="utf-8")
+    return root
+
+
+class TestDependencySearchEndToEnd:
+    """
+    The full dependency-search path: resolving the reference from the project file, reading the
+    assembly's metadata, and reporting the symbols with encoded external paths.
+    """
+
+    def test_dependency_symbol_is_found(self, consumer_project_root: Path):
+        search = AssemblyDependencySearch()
+        project = SimpleNamespace(project_root=str(consumer_project_root))
+
+        found = search.find(cast("Project", project), "ConsoleGreeter", substring_matching=False)
+
+        assert [s.name for s in found] == ["ConsoleGreeter"]
+
+    def test_dependency_symbol_is_located_by_an_external_path(self, consumer_project_root: Path):
+        search = AssemblyDependencySearch()
+        project = SimpleNamespace(project_root=str(consumer_project_root))
+
+        symbol = search.find(cast("Project", project), "ConsoleGreeter", substring_matching=False)[0]
+
+        assert symbol.relative_path is not None
+        assert AssemblyFileProxy.matches(symbol.relative_path)
+        assert not symbol.location.has_position_in_file()
+
+    def test_symbol_of_the_consumer_project_is_not_reported(self, consumer_project_root: Path):
+        """Only dependencies are searched; the project's own sources are the language server's job."""
+        search = AssemblyDependencySearch()
+        project = SimpleNamespace(project_root=str(consumer_project_root))
+
+        assert search.find(cast("Project", project), "Program", substring_matching=False) == []
+
+    def test_project_without_references_yields_nothing(self, tmp_path: Path):
+        (tmp_path / "Bare.csproj").write_text(_PROJECT_FILE, encoding="utf-8")
+        search = AssemblyDependencySearch()
+        project = SimpleNamespace(project_root=str(tmp_path))
+
+        assert search.find(cast("Project", project), "ConsoleGreeter", substring_matching=False) == []
