@@ -6,6 +6,9 @@ Status of the `main` branch. Changes prior to the next official version change w
   - Fix: Parallel agents auto-registering projects could overwrite each other's changes to the global
     project list in `serena_config.yml`
   - Fix: `read_only` restriction in project definition was not applied to base tool set when in single-project context (#1938)
+  - External paths (locations of symbols that are not project files) are now resolved through a
+    registry of self-registering file proxy types, so that support for a new external-path source
+    no longer requires changes to the general file abstraction
 
 * JetBrains:
   - Fix: Concurrent Serena sessions activating different projects at the same time with
