@@ -1,7 +1,11 @@
 import logging
-from typing import Protocol
+from collections import Counter
+from collections.abc import Iterator
+from typing import Any, Protocol
 
-from serena.dotnet.assembly_symbol import AssemblySymbol
+import dnfile
+
+from serena.dotnet.assembly_symbol import AssemblySymbol, AssemblySymbolKind
 from serena.symbol import NamePathMatcher
 
 log = logging.getLogger(__name__)
@@ -59,3 +63,140 @@ class AssemblySymbolIndex:
                     log.warning("Failed to read symbols from assembly %s: %s", assembly_path, e)
             self._symbols = symbols
         return self._symbols
+
+
+class DnFileMetadataReader:
+    """
+    Reads symbols from a .NET assembly's CLI metadata tables using `dnfile`.
+
+    Reading is pure Python: no .NET runtime or SDK is required.
+    """
+
+    _MODULE_TYPE_NAME = "<Module>"
+    """
+    Name of the synthetic type holding an assembly's global members; never a user-facing symbol.
+    See ECMA-335 6th ed. II.22.37 (TypeDef), which requires this row to be present.
+    """
+    _VISIBLE_METHOD_FLAGS = ("mdPublic", "mdFamily")
+    """
+    The `ClrMethodAttr` flags denoting a method that is part of a type's usable surface:
+    `Public` and `Family` ("protected", i.e. accessible to derived types).
+    See ECMA-335 6th ed. II.23.1.10 and
+    https://learn.microsoft.com/en-us/dotnet/api/system.reflection.methodattributes
+    """
+    _VISIBLE_FIELD_FLAGS = ("fdPublic", "fdFamily")
+    """
+    The `ClrFieldAttr` counterparts of :attr:`_VISIBLE_METHOD_FLAGS`. `dnfile` models the two
+    attribute enums as separate flag objects using distinct member prefixes (`md` vs `fd`), so
+    the accessibility of a method and of a field must be queried by different names.
+    See ECMA-335 6th ed. II.23.1.5 and
+    https://learn.microsoft.com/en-us/dotnet/api/system.reflection.fieldattributes
+    """
+
+    def read_symbols(self, assembly_path: str) -> list[AssemblySymbol]:
+        """
+        :param assembly_path: the absolute path of the assembly to read
+        :return: the public types and members declared in the assembly
+        """
+        pe = dnfile.dnPE(assembly_path)
+        type_defs = getattr(pe.net.mdtables, "TypeDef", None) if pe.net is not None else None
+        if type_defs is None:
+            return []
+
+        symbols: list[AssemblySymbol] = []
+        for type_def in type_defs.rows:
+            type_name = str(type_def.TypeName)
+            if not self._is_reportable_name(type_name):
+                continue
+            namespace = str(type_def.TypeNamespace) or None
+            symbols.append(
+                AssemblySymbol(
+                    name=type_name,
+                    kind=AssemblySymbolKind.TYPE,
+                    namespace=namespace,
+                    declaring_type_name_path=None,
+                    assembly_path=assembly_path,
+                )
+            )
+            symbols.extend(self._read_members(type_def, type_name, namespace, assembly_path))
+        return symbols
+
+    def _read_members(self, type_def: Any, type_name: str, namespace: str | None, assembly_path: str) -> list[AssemblySymbol]:
+        """
+        :param type_def: the TypeDef row declaring the members
+        :param type_name: the name of the declaring type
+        :param namespace: the namespace of the declaring type
+        :param assembly_path: the path of the assembly being read
+        :return: the publicly visible members declared by the given type
+        """
+        members: list[AssemblySymbol] = []
+
+        # collect the reportable methods first, because an overload index is assigned only to
+        # names that occur more than once (matching `SolidLanguageServer`'s convention) and that
+        # is not known until all of the type's methods have been seen
+        method_names = [
+            str(row.Name)
+            for row in self._iter_rows(type_def, "MethodList")
+            if self._is_reportable_name(str(row.Name)) and self._is_visible(row.Flags, self._VISIBLE_METHOD_FLAGS)
+        ]
+        name_counts = Counter(method_names)
+        emitted_counts: Counter[str] = Counter()
+        for name in method_names:
+            overload_idx = None
+            if name_counts[name] > 1:
+                overload_idx = emitted_counts[name]
+                emitted_counts[name] += 1
+            members.append(
+                AssemblySymbol(
+                    name=name,
+                    kind=AssemblySymbolKind.METHOD,
+                    namespace=namespace,
+                    declaring_type_name_path=type_name,
+                    assembly_path=assembly_path,
+                    overload_idx=overload_idx,
+                )
+            )
+
+        for field_row in self._iter_rows(type_def, "FieldList"):
+            name = str(field_row.Name)
+            if not self._is_reportable_name(name) or not self._is_visible(field_row.Flags, self._VISIBLE_FIELD_FLAGS):
+                continue
+            members.append(
+                AssemblySymbol(
+                    name=name,
+                    kind=AssemblySymbolKind.FIELD,
+                    namespace=namespace,
+                    declaring_type_name_path=type_name,
+                    assembly_path=assembly_path,
+                )
+            )
+        return members
+
+    @staticmethod
+    def _iter_rows(type_def: Any, list_attribute_name: str) -> Iterator[Any]:
+        """
+        :param type_def: the TypeDef row
+        :param list_attribute_name: the name of the row-list attribute to traverse
+        :return: an iterator over the referenced rows that could be resolved
+        """
+        for row_ref in getattr(type_def, list_attribute_name, None) or []:
+            row = getattr(row_ref, "row", None)
+            if row is not None:
+                yield row
+
+    @staticmethod
+    def _is_visible(flags: Any, visible_flag_names: tuple[str, ...]) -> bool:
+        """
+        :param flags: the member's flags object
+        :param visible_flag_names: the names of the flags denoting a visible member
+        :return: whether the member is part of the type's usable surface
+        """
+        return any(getattr(flags, flag_name, False) for flag_name in visible_flag_names)
+
+    def _is_reportable_name(self, name: str) -> bool:
+        """
+        :param name: the metadata name of a type or member
+        :return: whether the name denotes a symbol that should be reported (i.e. not
+            compiler-generated and not the synthetic module type)
+        """
+        return bool(name) and name != self._MODULE_TYPE_NAME and "<" not in name and ">" not in name

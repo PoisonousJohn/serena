@@ -40,6 +40,8 @@ dependencies = [
   "pystray==0.19.5",
   "pygls==2.1.1", # used to implement an msl language server
   "lsprotocol==2025.0.0",
+  "dnfile==0.18.0", # reads .NET assembly metadata for C# dependency symbol search
+  "pefile==2024.8.26", # transitive dep of dnfile, pinned exactly (uvx ignores the lock file)
   # Transitive deps pinned for security (dependabot alerts).
   # Exact pins because uvx installs from git, ignoring the lock file.
   "urllib3==2.7.0",
