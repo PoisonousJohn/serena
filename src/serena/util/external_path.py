@@ -49,7 +49,10 @@ class ExternalFileProxyRegistry:
     happened to import beforehand.
     """
 
-    _BACKEND_PROXY_MODULES = ("serena.jetbrains.jetbrains_file_proxy",)
+    _BACKEND_PROXY_MODULES = (
+        "serena.jetbrains.jetbrains_file_proxy",
+        "serena.dotnet.assembly_file_proxy",
+    )
 
     def __init__(self) -> None:
         self._proxy_types: list[type[ExternalFileProxy]] = []
