@@ -21,7 +21,9 @@ Status of the `main` branch. Changes prior to the next official version change w
     dependencies for matching symbols, i.e. libraries that are referenced but whose sources are not
     part of the project and which the language server therefore does not index. Currently
     implemented for C#, reading the metadata of referenced .NET assemblies; symbols found this way
-    are reported with encoded external paths and are read-only
+    are reported with encoded external paths and are read-only, carrying neither a body nor a
+    position, and their paths cannot be passed to tools expecting a file path. Note that the first
+    search reads every referenced assembly, which takes tens of seconds on a large project
 
 * Hooks:
   - Fix: Codex's documented hook wiring only routes `remind` through `PreToolUse` on `Bash`, so its

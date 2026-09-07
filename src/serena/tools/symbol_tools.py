@@ -193,6 +193,11 @@ class FindSymbolTool(Tool, ToolMarkerSymbolicRead):
             be preferred to web search when analysing a library that the project references.
             Supported for languages that provide a dependency search (currently C#); for others
             this yields no additional results.
+            Note that such a symbol reports neither a body nor a position, and that its encoded
+            path cannot be passed to tools which expect a file path (e.g. `find_referencing_symbols`
+            or `read_file`): use it to establish that a symbol exists and where it is declared.
+            Note also that the first such search inspects every referenced library, which can take
+            a minute on a large project (results are not cached across calls).
         :param max_matches: maximum number of permitted matches. If exceeded, a shortened result is returned
              which allows refining the search. -1 (default) means no limit. Set to 1 if you search for a single symbol.
         :param max_answer_chars: max result length; -1 for default
