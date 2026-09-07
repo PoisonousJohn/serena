@@ -1,5 +1,6 @@
 import logging
 import os
+import time
 from pathlib import Path
 from xml.etree import ElementTree
 
@@ -25,12 +26,23 @@ class AssemblyReferenceResolver:
         """
         :return: absolute paths of the referenced source-less assemblies, deduplicated and sorted
         """
+        started_at = time.monotonic()
         assembly_paths: set[Path] = set()
+        num_project_files = 0
         for project_file in self._project_root.rglob("*.csproj"):
+            num_project_files += 1
             assembly_paths.update(self._read_hint_paths(project_file))
 
         # keep only existing assemblies that ship without sources
         result = {p for p in assembly_paths if p.is_file() and not self._has_sources_alongside(p)}
+        log.info(
+            "Resolved %d referenced source-less assemblies from %d project file(s) under %s in %.2fs (%d references total)",
+            len(result),
+            num_project_files,
+            self._project_root,
+            time.monotonic() - started_at,
+            len(assembly_paths),
+        )
         return sorted(str(p) for p in result)
 
     def _read_hint_paths(self, project_file: Path) -> list[Path]:

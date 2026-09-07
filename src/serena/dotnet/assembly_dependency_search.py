@@ -1,3 +1,5 @@
+import logging
+import time
 from typing import TYPE_CHECKING, Any, cast
 
 from serena.dependency_search import DependencySymbolSearch
@@ -12,6 +14,8 @@ from solidlsp.ls_types import UnifiedSymbolInformation
 if TYPE_CHECKING:
     from serena.project import Project
 
+log = logging.getLogger(__name__)
+
 
 class AssemblyDependencySearch(DependencySymbolSearch):
     """
@@ -23,11 +27,22 @@ class AssemblyDependencySearch(DependencySymbolSearch):
         return language_server_id in (LanguageServerId.CSHARP, LanguageServerId.CSHARP_OMNISHARP)
 
     def find(self, project: "Project", name_path_pattern: str, substring_matching: bool) -> list[LanguageServerSymbol]:
+        started_at = time.monotonic()
+        log.info("Searching .NET dependencies of %s for '%s'", project.project_root, name_path_pattern)
+
         assembly_paths = AssemblyReferenceResolver(project.project_root).resolve()
         if not assembly_paths:
+            log.info("No referenced source-less assemblies found; no dependency symbols can be provided")
             return []
+
+        # the index is per-search, so every search pays the reading cost anew (see class docstring)
         index = AssemblySymbolIndex(assembly_paths, DnFileMetadataReader())
-        return [self._to_language_server_symbol(s) for s in index.find(name_path_pattern, substring_matching=substring_matching)]
+        symbols = [self._to_language_server_symbol(s) for s in index.find(name_path_pattern, substring_matching=substring_matching)]
+
+        log.info(
+            "Dependency search for '%s' completed in %.2fs: %d symbols", name_path_pattern, time.monotonic() - started_at, len(symbols)
+        )
+        return symbols
 
     @staticmethod
     def _to_language_server_symbol(symbol: AssemblySymbol) -> LanguageServerSymbol:

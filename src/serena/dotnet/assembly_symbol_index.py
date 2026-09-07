@@ -1,4 +1,6 @@
 import logging
+import os
+import time
 from collections import Counter
 from collections.abc import Iterator
 from typing import Any, Protocol
@@ -26,7 +28,15 @@ class AssemblySymbolIndex:
     """
     Searches the symbols declared in a set of .NET assemblies by name path.
 
-    Symbols are read lazily on first search and kept in memory afterwards.
+    Symbols are read lazily on first search and kept in memory afterwards, so the first search
+    bears the entire reading cost and subsequent ones are served from memory.
+    """
+
+    _SLOW_ASSEMBLY_LOG_THRESHOLD_SECS = 0.5
+    """
+    Duration from which reading a single assembly is reported at INFO rather than DEBUG level,
+    so that the few large assemblies dominating a slow search are identifiable without having to
+    enable debug logging for the hundreds of small ones.
     """
 
     def __init__(self, assembly_paths: list[str], reader: AssemblyMetadataReader) -> None:
@@ -47,22 +57,77 @@ class AssemblySymbolIndex:
         :return: the matching symbols
         """
         matcher = NamePathMatcher(name_path_pattern, substring_matching=substring_matching)
-        return [s for s in self._get_symbols() if matcher.matches_reversed_components(s.iter_name_path_components_reversed())]
+        symbols = self._get_symbols()
+        started_at = time.monotonic()
+        matches = [s for s in symbols if matcher.matches_reversed_components(s.iter_name_path_components_reversed())]
+        log.info(
+            "Matched '%s' against %d assembly symbols in %.2fs: %d hits",
+            name_path_pattern,
+            len(symbols),
+            time.monotonic() - started_at,
+            len(matches),
+        )
+        return matches
 
     def _get_symbols(self) -> list[AssemblySymbol]:
         """
         :return: the symbols of all assemblies, reading them on first access
         """
         if self._symbols is None:
-            symbols: list[AssemblySymbol] = []
-            for assembly_path in self._assembly_paths:
-                try:
-                    symbols.extend(self._reader.read_symbols(assembly_path))
-                except Exception as e:
-                    # an unreadable assembly must not prevent searching the others
-                    log.warning("Failed to read symbols from assembly %s: %s", assembly_path, e)
-            self._symbols = symbols
+            self._symbols = self._read_all_symbols()
         return self._symbols
+
+    def _read_all_symbols(self) -> list[AssemblySymbol]:
+        """
+        Reads the symbols of all assemblies, logging the progress: reading is the expensive part
+        of a first search (seconds per hundred assemblies), so the log has to make both the total
+        cost and its distribution across assemblies visible.
+
+        :return: the symbols declared in all assemblies that could be read
+        """
+        log.info("Reading symbols from %d assemblies", len(self._assembly_paths))
+        started_at = time.monotonic()
+        symbols: list[AssemblySymbol] = []
+        num_failed = 0
+
+        for i, assembly_path in enumerate(self._assembly_paths, start=1):
+            assembly_started_at = time.monotonic()
+            try:
+                assembly_symbols = self._reader.read_symbols(assembly_path)
+            except Exception as e:
+                # an unreadable assembly must not prevent searching the others
+                num_failed += 1
+                log.warning("Failed to read symbols from assembly %s: %s", assembly_path, e)
+                continue
+            symbols.extend(assembly_symbols)
+            duration = time.monotonic() - assembly_started_at
+            if duration >= self._SLOW_ASSEMBLY_LOG_THRESHOLD_SECS:
+                log.info(
+                    "  [%d/%d] %s: %d symbols in %.2fs",
+                    i,
+                    len(self._assembly_paths),
+                    os.path.basename(assembly_path),
+                    len(assembly_symbols),
+                    duration,
+                )
+            else:
+                log.debug(
+                    "  [%d/%d] %s: %d symbols in %.2fs",
+                    i,
+                    len(self._assembly_paths),
+                    os.path.basename(assembly_path),
+                    len(assembly_symbols),
+                    duration,
+                )
+
+        log.info(
+            "Read %d symbols from %d/%d assemblies in %.2fs",
+            len(symbols),
+            len(self._assembly_paths) - num_failed,
+            len(self._assembly_paths),
+            time.monotonic() - started_at,
+        )
+        return symbols
 
 
 class DnFileMetadataReader:
