@@ -8,6 +8,7 @@ from typing import Any, Protocol
 import dnfile
 
 from serena.dotnet.assembly_symbol import AssemblySymbol, AssemblySymbolKind
+from serena.dotnet.assembly_symbol_cache import AssemblySymbolCache
 from serena.symbol import NamePathMatcher
 
 log = logging.getLogger(__name__)
@@ -28,8 +29,9 @@ class AssemblySymbolIndex:
     """
     Searches the symbols declared in a set of .NET assemblies by name path.
 
-    Symbols are read lazily on first search and kept in memory afterwards, so the first search
-    bears the entire reading cost and subsequent ones are served from memory.
+    Symbols are obtained lazily on first search and kept in memory afterwards, so the first search
+    bears the entire cost and subsequent ones are served from memory. Where a cache is supplied,
+    an assembly whose content is unchanged is not read at all.
     """
 
     _SLOW_ASSEMBLY_LOG_THRESHOLD_SECS = 0.5
@@ -39,13 +41,15 @@ class AssemblySymbolIndex:
     enable debug logging for the hundreds of small ones.
     """
 
-    def __init__(self, assembly_paths: list[str], reader: AssemblyMetadataReader) -> None:
+    def __init__(self, assembly_paths: list[str], reader: AssemblyMetadataReader, cache: AssemblySymbolCache | None = None) -> None:
         """
         :param assembly_paths: absolute paths of the assemblies to search
         :param reader: the reader used to obtain symbols from an assembly
+        :param cache: an optional cache consulted before reading an assembly and updated after
         """
         self._assembly_paths = assembly_paths
         self._reader = reader
+        self._cache = cache
         self._symbols: list[AssemblySymbol] | None = None
 
     def find(self, name_path_pattern: str, substring_matching: bool = False) -> list[AssemblySymbol]:
@@ -79,9 +83,9 @@ class AssemblySymbolIndex:
 
     def _read_all_symbols(self) -> list[AssemblySymbol]:
         """
-        Reads the symbols of all assemblies, logging the progress: reading is the expensive part
-        of a first search (seconds per hundred assemblies), so the log has to make both the total
-        cost and its distribution across assemblies visible.
+        Reads the symbols of all assemblies, taking them from the cache where possible and
+        logging the progress: reading is the expensive part of a first search (seconds per hundred
+        assemblies), so the log has to make both the total cost and its distribution visible.
 
         :return: the symbols declared in all assemblies that could be read
         """
@@ -89,8 +93,15 @@ class AssemblySymbolIndex:
         started_at = time.monotonic()
         symbols: list[AssemblySymbol] = []
         num_failed = 0
+        num_cached = 0
 
         for i, assembly_path in enumerate(self._assembly_paths, start=1):
+            cached_symbols = self._cache.get(assembly_path) if self._cache is not None else None
+            if cached_symbols is not None:
+                num_cached += 1
+                symbols.extend(cached_symbols)
+                continue
+
             assembly_started_at = time.monotonic()
             try:
                 assembly_symbols = self._reader.read_symbols(assembly_path)
@@ -100,32 +111,23 @@ class AssemblySymbolIndex:
                 log.warning("Failed to read symbols from assembly %s: %s", assembly_path, e)
                 continue
             symbols.extend(assembly_symbols)
+            if self._cache is not None:
+                self._cache.put(assembly_path, assembly_symbols)
             duration = time.monotonic() - assembly_started_at
+            message = "  [%d/%d] %s: %d symbols in %.2fs"
+            args = (i, len(self._assembly_paths), os.path.basename(assembly_path), len(assembly_symbols), duration)
             if duration >= self._SLOW_ASSEMBLY_LOG_THRESHOLD_SECS:
-                log.info(
-                    "  [%d/%d] %s: %d symbols in %.2fs",
-                    i,
-                    len(self._assembly_paths),
-                    os.path.basename(assembly_path),
-                    len(assembly_symbols),
-                    duration,
-                )
+                log.info(message, *args)
             else:
-                log.debug(
-                    "  [%d/%d] %s: %d symbols in %.2fs",
-                    i,
-                    len(self._assembly_paths),
-                    os.path.basename(assembly_path),
-                    len(assembly_symbols),
-                    duration,
-                )
+                log.debug(message, *args)
 
         log.info(
-            "Read %d symbols from %d/%d assemblies in %.2fs",
+            "Read %d symbols from %d/%d assemblies in %.2fs (%d from cache)",
             len(symbols),
             len(self._assembly_paths) - num_failed,
             len(self._assembly_paths),
             time.monotonic() - started_at,
+            num_cached,
         )
         return symbols
 
