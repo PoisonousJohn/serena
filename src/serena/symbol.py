@@ -764,30 +764,6 @@ class LanguageServerSymbolRetriever:
                 )
         return symbols
 
-    def find_in_dependencies(self, name_path_pattern: str, substring_matching: bool = False) -> list[LanguageServerSymbol]:
-        """
-        Finds symbols matching the given pattern in the project's dependencies, i.e. in libraries
-        which are referenced by the project but not indexed by the language server.
-
-        Which dependencies can be searched depends on the languages in use; languages without a
-        registered search contribute no results.
-
-        :param name_path_pattern: the name path matching pattern
-        :param substring_matching: whether to use substring matching for the last pattern component
-        :return: the matching symbols
-        """
-        from serena.dependency_search import DEPENDENCY_SEARCH_REGISTRY
-
-        searches = DEPENDENCY_SEARCH_REGISTRY.find_all_for(self.project.project_config.language_servers)
-        symbols: list[LanguageServerSymbol] = []
-        for search in searches:
-            try:
-                symbols.extend(search.find(self.project, name_path_pattern, substring_matching))
-            except Exception as e:
-                # a failing dependency search must not break the primary symbol search
-                log.warning("Dependency search %s failed: %s", search, e)
-        return symbols
-
     def find_unique(
         self,
         name_path_pattern: str,

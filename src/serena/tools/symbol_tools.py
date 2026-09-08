@@ -151,7 +151,6 @@ class FindSymbolTool(Tool, ToolMarkerSymbolicRead):
         include_kinds: list[int] = [],  # noqa: B006
         exclude_kinds: list[int] = [],  # noqa: B006
         substring_matching: bool = False,
-        search_deps: bool = False,
         max_matches: int = -1,
         max_answer_chars: int = -1,
     ) -> str:
@@ -187,17 +186,6 @@ class FindSymbolTool(Tool, ToolMarkerSymbolicRead):
         :param exclude_kinds: (optional) list of LSP symbol kinds (integers) to exclude.
         :param substring_matching: If True, use substring matching for the last element of the pattern, such that
             "Foo/get" would match "Foo/getValue" and "Foo/getData".
-        :param search_deps: whether to also search the project's dependencies (i.e. libraries that
-            are referenced but whose sources are not part of the project). Symbols found there are
-            reported with encoded external paths and are read-only; searching dependencies should
-            be preferred to web search when analysing a library that the project references.
-            Supported for languages that provide a dependency search (currently C#); for others
-            this yields no additional results.
-            Note that such a symbol reports neither a body nor a position, and that its encoded
-            path cannot be passed to tools which expect a file path (e.g. `find_referencing_symbols`
-            or `read_file`): use it to establish that a symbol exists and where it is declared.
-            Note also that the first such search inspects every referenced library, which can take
-            a minute on a large project (results are not cached across calls).
         :param max_matches: maximum number of permitted matches. If exceeded, a shortened result is returned
              which allows refining the search. -1 (default) means no limit. Set to 1 if you search for a single symbol.
         :param max_answer_chars: max result length; -1 for default
@@ -218,8 +206,6 @@ class FindSymbolTool(Tool, ToolMarkerSymbolicRead):
             substring_matching=substring_matching,
             within_relative_path=relative_path,
         )
-        if search_deps:
-            symbols = symbols + symbol_retriever.find_in_dependencies(name_path_pattern, substring_matching=substring_matching)
         n_matches = len(symbols)
 
         def create_short_result_relative_path_to_name_paths() -> str:

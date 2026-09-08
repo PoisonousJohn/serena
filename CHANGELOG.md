@@ -17,13 +17,11 @@ Status of the `main` branch. Changes prior to the next official version change w
     command and Serena waits for the plugin server to become reachable before proceeding (#1864)
 
 * Tools:
-  - `find_symbol`: New parameter `search_deps`, which additionally searches the project's
-    dependencies for matching symbols, i.e. libraries that are referenced but whose sources are not
-    part of the project and which the language server therefore does not index. Currently
-    implemented for C#, reading the metadata of referenced .NET assemblies; symbols found this way
-    are reported with encoded external paths and are read-only, carrying neither a body nor a
-    position, and their paths cannot be passed to tools expecting a file path. Note that the first
-    search reads every referenced assembly, which takes tens of seconds on a large project
+  - New optional tool `find_dll_symbol_usages`: finds the places in the project that use a symbol
+    defined in a referenced .NET assembly without sources (e.g. a Unity or NuGet library method).
+    Usages are resolved by the language server, so occurrences in comments and string literals are
+    not reported. The index of assembly symbols is cached on disk and warmed up in the background
+    when the project is activated
 
 * Hooks:
   - Fix: Codex's documented hook wiring only routes `remind` through `PreToolUse` on `Bash`, so its
