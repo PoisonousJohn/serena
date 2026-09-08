@@ -1257,6 +1257,8 @@ class SerenaAgent:
         def init_project_services() -> None:
             self._run_project_activation_command(project)
             self._init_active_project_language_backend()
+            # warm up the dependency symbol index, which is expensive to build on first use
+            project.get_assembly_symbol_provider().warm_up()
 
         # initialise the project's language backend in the background
         self.issue_task(init_project_services)

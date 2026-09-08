@@ -25,6 +25,7 @@ from solidlsp.ls_config import LanguageServerId
 
 if TYPE_CHECKING:
     from serena.agent import SerenaAgent
+    from serena.dotnet.assembly_symbol_provider import AssemblySymbolProvider
 
 log = logging.getLogger(__name__)
 
@@ -44,6 +45,7 @@ class Project(ToStringMixin):
         self.serena_config = serena_config
         self._serena_data_folder = serena_config.get_project_serena_folder(self.project_root)
         log.info("Serena project data folder: %s", self._serena_data_folder)
+        self._assembly_symbol_provider: "AssemblySymbolProvider | None" = None
 
         read_only_memory_patterns = serena_config.read_only_memory_patterns + project_config.read_only_memory_patterns
         ignored_memory_patterns = serena_config.ignored_memory_patterns + project_config.ignored_memory_patterns
@@ -155,6 +157,21 @@ class Project(ToStringMixin):
 
     def path_to_serena_data_folder(self) -> str:
         return self._serena_data_folder
+
+    def get_assembly_symbol_provider(self) -> "AssemblySymbolProvider":
+        """
+        :return: the provider of symbols declared in the .NET assemblies the project references;
+            the same instance on every call, so that the assemblies are read only once
+        """
+        from serena.dotnet.assembly_symbol_provider import AssemblySymbolProvider
+        from solidlsp.ls import SolidLanguageServer
+
+        if self._assembly_symbol_provider is None:
+            cache_file_path = os.path.join(
+                self._serena_data_folder, SolidLanguageServer.CACHE_FOLDER_NAME, "dotnet", "assembly_symbols.pickle.gz"
+            )
+            self._assembly_symbol_provider = AssemblySymbolProvider(self.project_root, cache_file_path)
+        return self._assembly_symbol_provider
 
     def path_to_project_yml(self) -> str:
         return self.serena_config.get_project_yml_location(self.project_root)

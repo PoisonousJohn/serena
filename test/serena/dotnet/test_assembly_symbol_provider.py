@@ -103,3 +103,27 @@ class TestReadingIsDoneOnce:
         provider.warm_up()
 
         assert len(reader.read_paths) == 1
+
+
+class TestProjectIntegration:
+    def test_project_exposes_one_provider_per_project(self, tmp_path: Path):
+        """The provider must be memoised, or each call would rebuild the index."""
+        from serena.config.serena_config import SerenaConfig
+        from serena.project import Project
+
+        make_project(tmp_path)
+        project = Project.load(str(tmp_path), SerenaConfig(gui_log_window=False, web_dashboard=False))
+
+        assert project.get_assembly_symbol_provider() is project.get_assembly_symbol_provider()
+
+    def test_provider_cache_lives_under_the_project_data_folder(self, tmp_path: Path):
+        from serena.config.serena_config import SerenaConfig
+        from serena.project import Project
+
+        make_project(tmp_path)
+        project = Project.load(str(tmp_path), SerenaConfig(gui_log_window=False, web_dashboard=False))
+
+        project.get_assembly_symbol_provider().warm_up()
+
+        cache_files = list(Path(tmp_path).rglob("assembly_symbols.pickle.gz"))
+        assert len(cache_files) == 1
