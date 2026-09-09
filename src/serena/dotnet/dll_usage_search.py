@@ -10,7 +10,6 @@ from serena.symbol import (
     LanguageServerSymbolRetriever,
     ReferenceInLanguageServerSymbol,
 )
-from solidlsp.ls_types import SymbolKind
 
 if TYPE_CHECKING:
     from serena.project import Project
@@ -46,19 +45,13 @@ class DllUsageSearch:
     search establishes the symbol's existence from assembly metadata and then locates a use of it
     in the project's sources, from which the language server resolves the references.
 
-    Locating that use site is language-server-specific. Roslyn was measured to report neither a
-    workspace symbol nor a document symbol for an externally declared member (a query for
-    `BeginDraw` yields nothing, and document symbols hold only the project's own declarations),
-    so the symbol query is followed by a fallback over the language server's semantic tokens,
-    which do cover use sites. Once a use site is known, `textDocument/references` from it returns
+    The use site is located through the language server's semantic tokens. Its symbol tree cannot
+    serve: Roslyn was measured to report an externally declared member in neither its workspace
+    symbols (a query for `BeginDraw` yields nothing) nor its document symbols, which hold only the
+    project's own declarations. Once a use site is known, `textDocument/references` from it returns
     every genuine use and no occurrence in a comment or a string literal.
     """
 
-    _REFERENCING_SYMBOL_KINDS = (SymbolKind.Method, SymbolKind.Function, SymbolKind.Constructor, SymbolKind.Property)
-    """
-    The kinds of project symbols whose bodies can contain a call; used to limit which symbols are
-    probed for a use site.
-    """
     _SOURCE_FILE_EXTENSIONS = (".cs",)
     """
     The extensions of the source files that can use a .NET assembly symbol; restricting the scan
@@ -109,26 +102,6 @@ class DllUsageSearch:
 
     def _find_use_site(self, symbol_name: str) -> LanguageServerSymbolLocation | None:
         """
-        Locates a position in the project's sources at which the given external symbol is used.
-
-        The project's declared symbols are queried first, which succeeds for a language server
-        that indexes external members. Roslyn does not (see the class docstring), so the search
-        then falls back to the language server's semantic tokens.
-
-        :param symbol_name: the (unqualified) name of the external symbol
-        :return: the location of a use, or None if the project contains none
-        """
-        for symbol in self._retriever.find(symbol_name, substring_matching=False):
-            location = symbol.location
-            if location.relative_path is None or not location.has_position_in_file():
-                continue
-            if symbol.symbol_kind in self._REFERENCING_SYMBOL_KINDS and self._resolves_outside_project(location):
-                return location
-
-        return self._find_use_site_among_tokens(symbol_name)
-
-    def _find_use_site_among_tokens(self, symbol_name: str) -> LanguageServerSymbolLocation | None:
-        """
         Locates a use of the given external symbol among the tokens the language server reports
         for the project's source files.
 
@@ -136,6 +109,11 @@ class DllUsageSearch:
         parsed the file: a comment or a string literal is reported as a single token, so its
         content cannot be mistaken for an identifier, and every candidate is confirmed by
         resolving its definition into the declaring assembly.
+
+        The language server's symbol tree is deliberately not consulted: it holds the project's
+        own declarations, and an externally declared member appears in neither its document nor
+        its workspace symbols (measured on Roslyn), so querying it costs a full symbol scan and
+        can never yield a use site.
 
         :param symbol_name: the (unqualified) name of the external symbol
         :return: the location of a use, or None if the project contains none
